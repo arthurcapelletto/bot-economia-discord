@@ -1,9 +1,4 @@
-# ============================================================================
-# RAILWAY.JSON - CONFIGURAÇÃO PARA RAILWAY FREE TIER
-# ============================================================================
-
 {
-  "$schema": "https://railway.app/railway.schema.json",
   "build": {
     "builder": "NIXPACKS",
     "buildCommand": "pip install -r requirements.txt"
