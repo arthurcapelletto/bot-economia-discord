@@ -39,6 +39,12 @@ class Database:
             return self.criar_usuario(user_id, f"User{user_id}")
         return self.usuarios[user_id]
 
+    def obter_ou_criar_usuario(self, user_id, nome_usuario):
+        """Alias para compatibilidade com cogs"""
+        if user_id not in self.usuarios:
+            return self.criar_usuario(user_id, nome_usuario)
+        return self.usuarios[user_id]
+
     def atualizar_saldo(self, user_id, valor):
         usuario = self.obter_usuario(user_id)
         novo_saldo = usuario.get('saldo', 0) + valor
