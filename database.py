@@ -27,6 +27,7 @@ class Database:
             'nome': nome_usuario,
             'saldo': 1000.00,
             'xp': 0,
+            'experiencia': 0,  # Alias para compatibilidade
             'nivel': 1,
             'streak_daily': 0,
             'data_criacao': datetime.now()
@@ -45,10 +46,16 @@ class Database:
             return self.criar_usuario(user_id, nome_usuario)
         return self.usuarios[user_id]
 
-    def atualizar_saldo(self, user_id, valor):
+    def atualizar_saldo(self, user_id, valor, tipo=None, descricao=None, extra=None):
+        """Atualizar saldo com suporte a múltiplos argumentos"""
         usuario = self.obter_usuario(user_id)
         novo_saldo = usuario.get('saldo', 0) + valor
         usuario['saldo'] = novo_saldo
+        
+        # Registrar transação se houver tipo
+        if tipo:
+            self.registrar_transacao(user_id, tipo, valor, descricao or "")
+        
         return novo_saldo
 
     def definir_saldo(self, user_id, valor):
@@ -62,6 +69,7 @@ class Database:
     def adicionar_xp(self, user_id, xp):
         usuario = self.obter_usuario(user_id)
         usuario['xp'] = usuario.get('xp', 0) + xp
+        usuario['experiencia'] = usuario['xp']  # Manter sincronizado
 
     def adicionar_nivel(self, user_id):
         usuario = self.obter_usuario(user_id)
