@@ -1,0 +1,16 @@
+# ============================================================================
+# RAILWAY.JSON - CONFIGURAÇÃO PARA RAILWAY FREE TIER
+# ============================================================================
+
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS",
+    "buildCommand": "pip install -r requirements.txt"
+  },
+  "deploy": {
+    "startCommand": "python bot_economia_b3.py",
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  }
+}
