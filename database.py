@@ -1,28 +1,24 @@
-import os
-from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 from datetime import datetime
-
-MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/economia_bot_b3')
+from collections import defaultdict
 
 class Database:
+    """Database em memória - sem MongoDB"""
+    
     def __init__(self):
-        try:
-            self.client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=10000, connectTimeoutMS=10000)
-            self.client.admin.command('ping')
-            self.db = self.client['economia_bot_b3']
-            
-            # Coleções principais
-            self.usuarios = self.db['usuarios']
-            self.transacoes = self.db['transacoes']
-            self.investimentos = self.db['investimentos']
-            self.pix_transacoes = self.db['pix_transacoes']
-            self.usuario_bloqueado_pix = self.db['usuario_bloqueado_pix']
-            
-            print("✅ Conectado ao MongoDB com sucesso!")
-        except (ConnectionFailure, ServerSelectionTimeoutError) as e:
-            print(f"❌ Erro ao conectar ao MongoDB: {e}")
-            raise
+        # Dados dos usuários
+        self.usuarios = {}
+        
+        # Transações gerais
+        self.transacoes_list = []
+        
+        # Investimentos
+        self.investimentos = {}
+        
+        # PIX
+        self.pix_transacoes_list = []
+        self.usuarios_bloqueados_pix = set()
+        
+        print("✅ Database em memória inicializado!")
 
     # ===== USUÁRIOS =====
     def criar_usuario(self, user_id, nome_usuario):
@@ -35,33 +31,35 @@ class Database:
             'streak_daily': 0,
             'data_criacao': datetime.now()
         }
-        self.usuarios.update_one({'user_id': user_id}, {'$set': usuario}, upsert=True)
+        self.usuarios[user_id] = usuario
         return usuario
 
     def obter_usuario(self, user_id):
-        usuario = self.usuarios.find_one({'user_id': user_id})
-        if not usuario:
+        if user_id not in self.usuarios:
             return self.criar_usuario(user_id, f"User{user_id}")
-        return usuario
+        return self.usuarios[user_id]
 
     def atualizar_saldo(self, user_id, valor):
         usuario = self.obter_usuario(user_id)
         novo_saldo = usuario.get('saldo', 0) + valor
-        self.usuarios.update_one({'user_id': user_id}, {'$set': {'saldo': novo_saldo}})
+        usuario['saldo'] = novo_saldo
         return novo_saldo
 
     def definir_saldo(self, user_id, valor):
-        self.usuarios.update_one({'user_id': user_id}, {'$set': {'saldo': valor}}, upsert=True)
+        usuario = self.obter_usuario(user_id)
+        usuario['saldo'] = valor
 
     def obter_saldo(self, user_id):
         usuario = self.obter_usuario(user_id)
         return usuario.get('saldo', 0)
 
     def adicionar_xp(self, user_id, xp):
-        self.usuarios.update_one({'user_id': user_id}, {'$inc': {'xp': xp}}, upsert=True)
+        usuario = self.obter_usuario(user_id)
+        usuario['xp'] = usuario.get('xp', 0) + xp
 
     def adicionar_nivel(self, user_id):
-        self.usuarios.update_one({'user_id': user_id}, {'$inc': {'nivel': 1}}, upsert=True)
+        usuario = self.obter_usuario(user_id)
+        usuario['nivel'] = usuario.get('nivel', 1) + 1
 
     # ===== TRANSAÇÕES =====
     def registrar_transacao(self, user_id, tipo, valor, descricao=""):
@@ -72,55 +70,48 @@ class Database:
             'descricao': descricao,
             'data': datetime.now()
         }
-        self.transacoes.insert_one(transacao)
+        self.transacoes_list.append(transacao)
         return transacao
 
     def obter_historico(self, user_id, limite=10):
-        return list(self.transacoes.find({'user_id': user_id}).sort('data', -1).limit(limite))
+        return [t for t in self.transacoes_list if t['user_id'] == user_id][-limite:]
 
     def obter_extrato(self, user_id, limite=50):
-        return list(self.transacoes.find({'user_id': user_id}).sort('data', -1).limit(limite))
+        return [t for t in self.transacoes_list if t['user_id'] == user_id][-limite:]
 
     # ===== INVESTIMENTOS =====
     def obter_carteira(self, user_id):
-        carteira = self.investimentos.find_one({'user_id': user_id})
-        if not carteira:
-            carteira = {'user_id': user_id, 'acoes': {}}
-            self.investimentos.insert_one(carteira)
-        return carteira.get('acoes', {})
+        if user_id not in self.investimentos:
+            self.investimentos[user_id] = {}
+        return self.investimentos[user_id]
 
     def adicionar_acao(self, user_id, ticker, quantidade, preco_compra):
-        carteira = self.investimentos.find_one({'user_id': user_id})
-        if not carteira:
-            carteira = {'user_id': user_id, 'acoes': {}}
-            self.investimentos.insert_one(carteira)
+        carteira = self.obter_carteira(user_id)
         
-        if ticker not in carteira['acoes']:
-            carteira['acoes'][ticker] = {'quantidade': 0, 'preco_medio': 0}
+        if ticker not in carteira:
+            carteira[ticker] = {'quantidade': 0, 'preco_medio': 0}
         
-        acao = carteira['acoes'][ticker]
+        acao = carteira[ticker]
         quantidade_total = acao['quantidade'] + quantidade
         preco_medio = ((acao['quantidade'] * acao['preco_medio']) + (quantidade * preco_compra)) / quantidade_total
         
-        self.investimentos.update_one(
-            {'user_id': user_id},
-            {'$set': {f'acoes.{ticker}': {'quantidade': quantidade_total, 'preco_medio': preco_medio}}}
-        )
+        carteira[ticker] = {'quantidade': quantidade_total, 'preco_medio': preco_medio}
 
     def vender_acao(self, user_id, ticker, quantidade):
-        carteira = self.investimentos.find_one({'user_id': user_id})
-        if not carteira or ticker not in carteira['acoes']:
+        carteira = self.obter_carteira(user_id)
+        
+        if ticker not in carteira:
             return False
         
-        acao = carteira['acoes'][ticker]
+        acao = carteira[ticker]
         if acao['quantidade'] < quantidade:
             return False
         
         nova_quantidade = acao['quantidade'] - quantidade
         if nova_quantidade == 0:
-            self.investimentos.update_one({'user_id': user_id}, {'$unset': {f'acoes.{ticker}': 1}})
+            del carteira[ticker]
         else:
-            self.investimentos.update_one({'user_id': user_id}, {'$set': {f'acoes.{ticker}.quantidade': nova_quantidade}})
+            carteira[ticker]['quantidade'] = nova_quantidade
         
         return True
 
@@ -142,21 +133,21 @@ class Database:
             'mensagem_id': mensagem_id,
             'status': 'concluido'
         }
-        self.pix_transacoes.insert_one(transacao_pix)
+        self.pix_transacoes_list.append(transacao_pix)
         return transacao_pix
 
     def obter_historico_pix(self, user_id, limite=10):
-        enviados = list(self.pix_transacoes.find({'remetente_id': user_id}).sort('data', -1).limit(limite))
-        recebidos = list(self.pix_transacoes.find({'destinatario_id': user_id}).sort('data', -1).limit(limite))
+        enviados = [p for p in self.pix_transacoes_list if p['remetente_id'] == user_id][-limite:]
+        recebidos = [p for p in self.pix_transacoes_list if p['destinatario_id'] == user_id][-limite:]
         return {'enviados': enviados, 'recebidos': recebidos}
 
     def obter_estatisticas_pix(self, user_id):
-        enviados = list(self.pix_transacoes.find({'remetente_id': user_id}))
-        recebidos = list(self.pix_transacoes.find({'destinatario_id': user_id}))
+        enviados = [p for p in self.pix_transacoes_list if p['remetente_id'] == user_id]
+        recebidos = [p for p in self.pix_transacoes_list if p['destinatario_id'] == user_id]
         
-        total_enviado = sum([pix['valor_bruto'] for pix in enviados])
-        total_recebido = sum([pix['valor_liquido'] for pix in recebidos])
-        total_taxas = sum([pix['taxa'] for pix in enviados])
+        total_enviado = sum([p['valor_bruto'] for p in enviados])
+        total_recebido = sum([p['valor_liquido'] for p in recebidos])
+        total_taxas = sum([p['taxa'] for p in enviados])
         
         return {
             'pix_enviados': len(enviados),
@@ -168,29 +159,22 @@ class Database:
         }
 
     def obter_pix_suspeitos(self):
-        # PIX de alto valor
-        alto_valor = list(self.pix_transacoes.find({'valor_bruto': {'$gt': 10000}}))
+        alto_valor = [p for p in self.pix_transacoes_list if p['valor_bruto'] > 10000]
         
-        # Usuários muito ativos
-        usuarios_ativos = {}
-        for pix in self.pix_transacoes.find():
-            remetente = pix['remetente_id']
-            if remetente not in usuarios_ativos:
-                usuarios_ativos[remetente] = 0
-            usuarios_ativos[remetente] += 1
+        usuarios_ativos = defaultdict(int)
+        for pix in self.pix_transacoes_list:
+            usuarios_ativos[pix['remetente_id']] += 1
         
         hiperativos = [{'user_id': uid, 'count': count} for uid, count in usuarios_ativos.items() if count > 20]
         
         return {'alto_valor': alto_valor, 'usuarios_hiperativos': hiperativos}
 
     def obter_relatorio_pix_servidor(self, dias=30):
-        from datetime import timedelta
-        data_limite = datetime.now() - timedelta(days=dias)
-        transacoes = list(self.pix_transacoes.find({'data': {'$gte': data_limite}}))
+        transacoes = self.pix_transacoes_list
         
         total_transacoes = len(transacoes)
-        volume_total = sum([pix['valor_bruto'] for pix in transacoes])
-        taxas_arrecadadas = sum([pix['taxa'] for pix in transacoes])
+        volume_total = sum([p['valor_bruto'] for p in transacoes])
+        taxas_arrecadadas = sum([p['taxa'] for p in transacoes])
         
         return {
             'total_transacoes': total_transacoes,
@@ -201,21 +185,22 @@ class Database:
         }
 
     def bloquear_usuario_pix(self, user_id, motivo):
-        self.usuario_bloqueado_pix.insert_one({'user_id': user_id, 'motivo': motivo, 'data': datetime.now()})
+        self.usuarios_bloqueados_pix.add(user_id)
 
     def desbloquear_usuario_pix(self, user_id):
-        self.usuario_bloqueado_pix.delete_one({'user_id': user_id})
+        self.usuarios_bloqueados_pix.discard(user_id)
 
     def verificar_bloqueio_pix(self, user_id):
-        return self.usuario_bloqueado_pix.find_one({'user_id': user_id}) is not None
+        return user_id in self.usuarios_bloqueados_pix
 
     # ===== RANKING =====
     def obter_ranking(self, limite=10):
-        usuarios = list(self.usuarios.find().sort('saldo', -1).limit(limite))
-        return usuarios
+        usuarios = sorted(self.usuarios.values(), key=lambda x: x['saldo'], reverse=True)
+        return usuarios[:limite]
 
     def obter_top_xp(self, limite=10):
-        usuarios = list(self.usuarios.find().sort('xp', -1).limit(limite))
-        return usuarios
+        usuarios = sorted(self.usuarios.values(), key=lambda x: x['xp'], reverse=True)
+        return usuarios[:limite]
 
+# Instância global
 db = Database()
